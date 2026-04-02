@@ -39,9 +39,10 @@ python fetch_run_logs.py \
 # Extract tuned & untuned shapes (writes CSVs to ./shapes/)
 python extract_gemm_shapes.py ./logs -o ./shapes
 
-# Feed untuned shapes into AITER tuner (run inside AITER container)
+# Re-tune ALL shapes after an AITER update (strip status column first)
+cut -d, -f1-3 shapes/a8w8_blockscale_all_shapes.csv > /tmp/all_shapes.csv
 python csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py \
-    -i shapes/a8w8_blockscale_untuned_shapes.csv \
+    -i /tmp/all_shapes.csv \
     -o aiter/configs/a8w8_blockscale_tuned_gemm.csv \
     --libtype both
 ```

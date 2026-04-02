@@ -342,7 +342,23 @@ This produces three CSVs in the output directory:
 | `a8w8_blockscale_untuned_shapes.csv` | Shapes that fell back to default config (M, N, K only) |
 | `a8w8_blockscale_all_shapes.csv` | Combined view with a `status` column (`tuned`, `untuned`, or `both`) |
 
-The untuned CSV (`M,N,K` only) can be fed directly into the blockscale GEMM tuner:
+The tuned shapes are collected so they can be **re-tuned after AITER updates** to
+pick up kernel improvements (new CK/CK-Tile variants, better heuristics, etc.).
+
+To re-tune all shapes (tuned + untuned) after an AITER upgrade:
+
+```bash
+# Strip the status column to get a clean M,N,K CSV for the tuner
+cut -d, -f1-3 shapes/a8w8_blockscale_all_shapes.csv > /tmp/all_shapes.csv
+
+python csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py \
+    -i /tmp/all_shapes.csv \
+    -o aiter/configs/a8w8_blockscale_tuned_gemm.csv \
+    --libtype both
+```
+
+To tune only the untuned shapes (the `_untuned_shapes.csv` has `M,N,K` only and
+can be fed directly):
 
 ```bash
 python csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py \
@@ -350,12 +366,6 @@ python csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py \
     -o aiter/configs/a8w8_blockscale_tuned_gemm.csv \
     --libtype both
 ```
-
-> **Note:** The `_all_shapes.csv` contains a `status` column that must be dropped
-> before feeding it to the tuner. Use `_untuned_shapes.csv` directly, or strip the
-> column: `cut -d, -f1-3 shapes/a8w8_blockscale_all_shapes.csv > /tmp/shapes.csv`
-
-This ensures every shape the model actually hits in production has a tuned kernel.
 
 ### 6.3 Merge with existing tuned configs
 
