@@ -1,6 +1,5 @@
 # AITER Kernel Tuning Guide: Blockscale GEMM & Fused MoE
 
-Target model: **Qwen3-Next-80B-A3B-Instruct-FP8** (applies to similar MoE architectures)
 Target hardware: **AMD Instinct MI300X / MI355X**
 Quantization: **FP8 (A8W8) with 128x128 block scaling**
 
@@ -31,18 +30,6 @@ rm -rf aiter/jit/build/* aiter/jit/__pycache__ aiter/jit/*.so
 AITER_REBUILD=1 python3 setup.py develop
 ```
 
-Ensure the following PRs are merged if using AITER v0.1.10.post3+:
-
-```bash
-# Unified attention fix
-git fetch origin pull/2190/head:pr-2190
-git merge --no-commit --no-ff pr-2190
-
-# Tuner fix (prevents hangs on some shapes)
-git fetch origin pull/2309/head:pr-2309
-git merge --no-commit --no-ff pr-2309
-```
-
 ---
 
 ## 1. Blockscale GEMM Tuning
@@ -60,8 +47,7 @@ M,N,K
 ```
 
 Each row is a (batch, output_dim, input_dim) shape that appears in the model's dense
-linear layers. To generate a model-specific shape list, see
-`aiter/configs/model_configs/a8w8_blockscale_untuned_gemm_qwen3_235b.csv` for an example.
+linear layers. See `aiter/configs/model_configs/` for model-specific shape list examples.
 
 ### 1.2 Microbenchmark BEFORE tuning
 
@@ -150,7 +136,7 @@ token,model_dim,inter_dim,expert,topk,act_type,dtype,q_dtype_a,q_dtype_w,q_type,
 512,6144,4096,8,2,ActivationType.Silu,torch.bfloat16,torch.float8_e4m3fn,...
 ```
 
-For Qwen3-Next-80B (FP8, blockscale), the relevant rows use:
+For FP8 blockscale MoE models, the relevant rows typically use:
 - `q_dtype_a=torch.float8_e4m3fn`, `q_dtype_w=torch.float8_e4m3fn`
 - `q_type=QuantType.per_1x128` (blockscale)
 - `use_g1u1=1` (gate-up fused), `act_type=ActivationType.Silu`
@@ -164,14 +150,14 @@ python3 op_tests/test_moe_blockscale.py \
     2>&1 | tee fmoe_before_tuning.log
 ```
 
-For a more targeted benchmark matching the model's exact configuration (512 experts,
-top-11, blockscale FP8), use:
+For a more targeted benchmark matching a specific model configuration, pass the
+model's MoE dimensions directly:
 
 ```bash
 python3 op_tests/test_moe_blockscale.py \
-    --E 512 --topk 11 --model_dim 7168 --inter_dim 2048 \
+    --E <num_experts> --topk <top_k> --model_dim <dim> --inter_dim <inter_dim> \
     --dtype torch.bfloat16 --quant_type per_1x128 \
-    2>&1 | tee fmoe_qwen3next_before_tuning.log
+    2>&1 | tee fmoe_model_before_tuning.log
 ```
 
 ### 2.3 Run the tuner
@@ -256,35 +242,26 @@ After tuning, validate that accuracy is preserved and measure serving throughput
 
 ### 4.1 Accuracy (lm_eval)
 
-Start the vLLM server:
+Start the vLLM server with AITER enabled:
 
 ```bash
 VLLM_ROCM_USE_AITER=1 \
-VLLM_ROCM_USE_AITER_FUSION_SHARED_EXPERTS=1 \
-VLLM_ROCM_USE_AITER_MHA=0 \
-vllm serve Qwen/Qwen3-Next-80B-A3B-Instruct-FP8 \
-    --attention-backend ROCM_AITER_UNIFIED_ATTN \
-    --compilation-config '{"cudagraph_mode": "FULL_AND_PIECEWISE", "custom_ops": ["-rms_norm", "-silu_and_mul", "-quant_fp8"]}' \
+vllm serve <MODEL> \
     --gpu-memory-utilization 0.95 \
     --host 0.0.0.0 \
-    --max-model-len 16384 \
-    --max-num-seqs 256 \
-    --no-async-scheduling \
-    --no-enable-prefix-caching \
     --port 8989 \
-    --swap-space 64 \
     --tensor-parallel-size 1
 ```
 
-Run lm_eval:
+Run lm_eval against the server:
 
 ```bash
 lm_eval --model local-completions \
     --tasks gsm8k \
-    --model_args model=Qwen/Qwen3-Next-80B-A3B-Instruct-FP8,base_url=http://localhost:8989/v1/completions,num_concurrent=16,max_retries=3,tokenized_requests=False
+    --model_args model=<MODEL>,base_url=http://localhost:8989/v1/completions,num_concurrent=16,max_retries=3,tokenized_requests=False
 ```
 
-**Expected baseline** (untuned, UNIFIED_ATTN): gsm8k flexible-extract ~0.83
+Compare the accuracy score against the pre-tuning baseline to confirm no regression.
 
 ### 4.2 Serving throughput
 
@@ -292,7 +269,7 @@ lm_eval --model local-completions \
 vllm bench serve \
     --backend vllm \
     --base-url http://localhost:8989 \
-    --model Qwen/Qwen3-Next-80B-A3B-Instruct-FP8 \
+    --model <MODEL> \
     --dataset-name random \
     --input-len 1024 \
     --output-len 1024 \
@@ -395,7 +372,7 @@ echo "Shapes needing tuning: $(wc -l < /tmp/missing.txt)"
 | `aiter/configs/a8w8_blockscale_tuned_gemm.csv` | Tuned blockscale GEMM results |
 | `aiter/configs/untuned_fmoe.csv` | Input shapes for FMoE tuning |
 | `aiter/configs/tuned_fmoe.csv` | Tuned FMoE results |
-| `aiter/configs/model_configs/` | Model-specific tuned configs (Qwen3-235B, etc.) |
+| `aiter/configs/model_configs/` | Model-specific tuned configs |
 | `op_tests/test_gemm_a8w8_blockscale.py` | Blockscale GEMM microbenchmark |
 | `op_tests/test_moe_blockscale.py` | Fused MoE microbenchmark |
 | `csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py` | Blockscale GEMM tuner |
