@@ -164,7 +164,24 @@ python3 op_tests/test_moe_blockscale.py \
     2>&1 | tee fmoe_model_before_tuning.log
 ```
 
-### 2.3 Run the tuner
+### 2.3 Force tuned kernels for FP8 blockscale
+
+> **Important:** Even after tuning, AITER bypasses tuned configs for FP8 blockscale
+> (`QuantType.per_1x128`) when `token * topk <= 128`, falling back to default
+> heuristics. To always use tuned kernels, patch
+> [`aiter/fused_moe.py`](https://github.com/ROCm/aiter/blob/af6b1162fe12d74c107a6d7b0a8b8aa7bb3053b7/aiter/fused_moe.py)
+> and make `use_cfg()` always return `True`:
+>
+> ```python
+> def use_cfg():
+>     return True  # was: bypass tuned for fp8 blockscale when token*topk <= 128
+> ```
+>
+> Without this patch, the small-batch shapes (token 1–16 with topk=8) logged as
+> "using 2stage default" will continue using defaults even if they appear in
+> `tuned_fmoe.csv`.
+
+### 2.4 Run the tuner
 
 ```bash
 AITER_REBUILD=1 python3 csrc/ck_gemm_moe_2stages_codegen/gemm_moe_tune.py \
@@ -179,20 +196,20 @@ each shape, selecting the best combination for stage-1 (gate+up GEMM) and stage-
 **Runtime:** ~30-60 minutes. The FMoE tuner is significantly slower than the GEMM tuner
 due to the combinatorial search over two stages.
 
-### 2.4 Rebuild AITER with tuned config
+### 2.5 Rebuild AITER with tuned config
 
 ```bash
 AITER_REBUILD=1 python3 setup.py develop
 ```
 
-### 2.5 Microbenchmark AFTER tuning
+### 2.6 Microbenchmark AFTER tuning
 
 ```bash
 python3 op_tests/test_moe_blockscale.py \
     2>&1 | tee fmoe_after_tuning.log
 ```
 
-### 2.6 Compare results
+### 2.7 Compare results
 
 ```bash
 diff fmoe_before_tuning.log fmoe_after_tuning.log
