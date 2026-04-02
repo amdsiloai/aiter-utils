@@ -134,28 +134,40 @@ class DatabricksMLflowClient:
         exact_match: bool = False,
         max_results: int = 1000,
     ) -> List[Dict]:
-        all_runs = self.search_runs(
-            experiment_ids=experiment_ids, max_results=max_results
-        )
-
         if not run_name_pattern:
-            return all_runs
+            return self.search_runs(
+                experiment_ids=experiment_ids, max_results=max_results
+            )
 
         use_glob = any(c in run_name_pattern for c in ("*", "?", "["))
-        filtered: List[Dict] = []
 
-        for run in all_runs:
-            name = self._extract_tags(run["data"]).get("mlflow.runName", "")
-            if exact_match:
-                match = name == run_name_pattern
-            elif use_glob:
-                match = fnmatch.fnmatch(name, run_name_pattern)
-            else:
-                match = run_name_pattern in name
-            if match:
-                filtered.append(run)
+        # Build server-side LIKE filter to avoid fetching all runs
+        if exact_match:
+            sql_filter = f"tags.mlflow.runName = '{run_name_pattern}'"
+        elif use_glob:
+            like_pat = run_name_pattern.replace("*", "%").replace("?", "_")
+            sql_filter = f"tags.mlflow.runName LIKE '{like_pat}'"
+        else:
+            sql_filter = f"tags.mlflow.runName LIKE '%{run_name_pattern}%'"
 
-        return filtered
+        runs = self.search_runs(
+            experiment_ids=experiment_ids,
+            filter_string=sql_filter,
+            max_results=max_results,
+        )
+
+        # Client-side re-check for glob patterns (LIKE doesn't handle [])
+        if use_glob and not exact_match:
+            runs = [
+                r
+                for r in runs
+                if fnmatch.fnmatch(
+                    self._extract_tags(r["data"]).get("mlflow.runName", ""),
+                    run_name_pattern,
+                )
+            ]
+
+        return runs
 
     def get_child_runs(
         self, parent_run_id: str, max_results: int = 1000
@@ -163,14 +175,11 @@ class DatabricksMLflowClient:
         parent_run = self.get_run(parent_run_id)
         experiment_id = parent_run["info"]["experiment_id"]
 
-        all_runs = self.search_runs(
-            experiment_ids=[experiment_id], max_results=max_results
+        return self.search_runs(
+            experiment_ids=[experiment_id],
+            filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'",
+            max_results=max_results,
         )
-        return [
-            r
-            for r in all_runs
-            if self._extract_tags(r["data"]).get("mlflow.parentRunId") == parent_run_id
-        ]
 
     def list_parent_runs(
         self,

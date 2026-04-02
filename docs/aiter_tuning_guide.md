@@ -323,18 +323,26 @@ python fetch_run_logs.py \
 This downloads all matching `docker_container_*.log` artifacts organized by
 experiment / run / child-run into `./logs/`.
 
-### 6.2 Extract untuned shapes
+### 6.2 Extract tuned & untuned shapes
 
-Scan the downloaded logs for "not found tuned config" warnings and collect the
-unique (M, N, K) shapes:
+Scan the downloaded logs for both the startup tuning table (already tuned shapes)
+and "not found tuned config" warnings (untuned shapes):
 
 ```bash
 python extract_gemm_shapes.py ./logs \
     --gemm-type a8w8_blockscale \
-    -o shapes/a8w8_blockscale_untuned_shapes.csv
+    -o ./shapes
 ```
 
-The output CSV can be fed directly into the blockscale GEMM tuner:
+This produces three CSVs in the output directory:
+
+| File | Contents |
+|------|----------|
+| `a8w8_blockscale_tuned_shapes.csv` | Already tuned shapes with full kernel details (cu_num, M, N, K, libtype, kernelId, splitK, us, kernelName, tflops, bw, errRatio) |
+| `a8w8_blockscale_untuned_shapes.csv` | Shapes that fell back to default config (M, N, K only) |
+| `a8w8_blockscale_all_shapes.csv` | Combined view with a `status` column (`tuned`, `untuned`, or `both`) |
+
+The untuned CSV (`M,N,K` only) can be fed directly into the blockscale GEMM tuner:
 
 ```bash
 python csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py \
@@ -342,6 +350,10 @@ python csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py \
     -o aiter/configs/a8w8_blockscale_tuned_gemm.csv \
     --libtype both
 ```
+
+> **Note:** The `_all_shapes.csv` contains a `status` column that must be dropped
+> before feeding it to the tuner. Use `_untuned_shapes.csv` directly, or strip the
+> column: `cut -d, -f1-3 shapes/a8w8_blockscale_all_shapes.csv > /tmp/shapes.csv`
 
 This ensures every shape the model actually hits in production has a tuned kernel.
 

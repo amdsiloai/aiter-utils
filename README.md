@@ -7,7 +7,7 @@ Utilities for tuning, benchmarking, and analyzing [AITER](https://github.com/ROC
 | Script | Description |
 |--------|-------------|
 | [`fetch_run_logs.py`](fetch_run_logs.py) | Download container logs from Databricks MLflow artifacts |
-| [`extract_gemm_shapes.py`](extract_gemm_shapes.py) | Extract untuned GEMM shapes from container logs |
+| [`extract_gemm_shapes.py`](extract_gemm_shapes.py) | Extract tuned & untuned GEMM shapes from container logs |
 | [`mlflow_client.py`](mlflow_client.py) | Lightweight Databricks MLflow client (shared library) |
 
 ## Documentation
@@ -19,8 +19,8 @@ Utilities for tuning, benchmarking, and analyzing [AITER](https://github.com/ROC
 ```
 1. Run benchmarks       ->  Results logged to Databricks MLflow
 2. fetch_run_logs.py    ->  Download container logs locally
-3. extract_gemm_shapes  ->  Find untuned GEMM shapes from logs
-4. AITER tuner          ->  Tune kernels for discovered shapes
+3. extract_gemm_shapes  ->  Inventory tuned & untuned GEMM shapes from logs
+4. AITER tuner          ->  Tune kernels for untuned shapes
 5. Re-benchmark         ->  Verify improvement
 ```
 
@@ -36,12 +36,12 @@ python fetch_run_logs.py \
     --run-pattern "oob_" \
     -o ./logs
 
-# Extract shapes that fell back to default kernels
-python extract_gemm_shapes.py ./logs -o shapes/untuned_blockscale.csv
+# Extract tuned & untuned shapes (writes CSVs to ./shapes/)
+python extract_gemm_shapes.py ./logs -o ./shapes
 
-# Feed into AITER tuner (run inside AITER container)
+# Feed untuned shapes into AITER tuner (run inside AITER container)
 python csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py \
-    -i shapes/untuned_blockscale.csv \
+    -i shapes/a8w8_blockscale_untuned_shapes.csv \
     -o aiter/configs/a8w8_blockscale_tuned_gemm.csv \
     --libtype both
 ```
@@ -50,7 +50,7 @@ python csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py \
 
 ### Databricks credentials
 
-`fetch_run_logs.py` and `benchmark_analysis.py` require Databricks access.
+`fetch_run_logs.py` requires Databricks access.
 Create a `.env` file or set environment variables:
 
 ```bash
@@ -66,7 +66,7 @@ aiter-utils/
 ├── requirements.txt
 ├── .env.template
 ├── fetch_run_logs.py          # Download MLflow container logs
-├── extract_gemm_shapes.py     # Parse logs for untuned shapes
+├── extract_gemm_shapes.py     # Parse logs for tuned & untuned shapes
 ├── mlflow_client.py           # Lightweight Databricks MLflow client
 ├── docs/
 │   └── aiter_tuning_guide.md  # Full tuning guide
