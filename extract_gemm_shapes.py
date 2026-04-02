@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """
-Extract GEMM Shapes (Tuned & Untuned)
+Extract AITER Kernel Shapes (Tuned & Untuned)
 
-Scans docker container log files for AITER GEMM shapes and writes
+Scans docker container log files for AITER GEMM and FMoE shapes and writes
 deduplicated results to CSVs, grouped into tuned vs. untuned.
 
-Untuned shapes come from lines like:
-    shape is M:6314, N:2048, K:2048, not found tuned config in
-    /tmp/aiter_configs/a8w8_blockscale_tuned_gemm.csv, will use default config!
+Blockscale GEMM:
+  Untuned: "shape is M:6314, N:2048, K:2048, not found tuned config ..."
+  Tuned:   startup table with cu_num M N K libtype kernelId splitK us kernelName tflops bw errRatio
 
-Tuned shapes come from the startup tuning table like:
-    (EngineCore pid=661)     256    16 7168  256      ck   8   0   2.97 a8w8_blockscale_...   19.79  697.21  0.0
+FMoE:
+  Untuned: "[fused_moe] using 1stage default for (256, 32768, 3072, 1536, 256, 8, ...)"
+  (tuned FMoE shapes are used silently and don't appear in logs)
 
 Usage:
     python extract_gemm_shapes.py ./logs
     python extract_gemm_shapes.py ./logs --gemm-type a8w8_blockscale -o shapes_dir
+    python extract_gemm_shapes.py ./logs --fmoe -o shapes_dir
+    python extract_gemm_shapes.py ./logs --all -o shapes_dir
 """
 
 import csv
@@ -26,6 +29,12 @@ from pathlib import Path
 TUNED_COLS = [
     "cu_num", "M", "N", "K", "libtype", "kernelId", "splitK",
     "us", "kernelName", "tflops", "bw", "errRatio",
+]
+
+FMOE_COLS = [
+    "token", "model_dim", "inter_dim", "expert", "topk",
+    "act_type", "dtype", "q_dtype_a", "q_dtype_w", "q_type",
+    "use_g1u1", "doweight_stage1",
 ]
 
 
@@ -51,7 +60,6 @@ def extract_gemm_shapes(
         r"shape is M:(\d+),\s*N:(\d+),\s*K:(\d+),\s*not found tuned config"
     )
 
-    # Tuned table row: cu_num M N K libtype kernelId splitK us kernelName tflops bw errRatio
     tuned_re = re.compile(
         r"\s+(\d+)"           # cu_num
         r"\s+(\d+)"           # M
@@ -140,7 +148,6 @@ def extract_gemm_shapes(
     sorted_untuned = sorted(all_untuned)
 
     tuned_only_keys = set(all_tuned.keys())
-    untuned_only_keys = all_untuned - tuned_only_keys
     overlap_keys = all_untuned & tuned_only_keys
 
     if verbose:
@@ -149,7 +156,6 @@ def extract_gemm_shapes(
         if overlap_keys:
             print(f"Overlap: {len(overlap_keys)} shapes appear in both tuned and untuned")
 
-    # Write tuned CSV with full kernel details
     if sorted_tuned:
         tuned_csv = out / f"{gemm_type}_tuned_shapes.csv"
         with open(tuned_csv, "w", newline="") as f:
@@ -159,7 +165,6 @@ def extract_gemm_shapes(
         if verbose:
             print(f"\nTuned  -> {tuned_csv}")
 
-    # Write untuned CSV (M, N, K only)
     if sorted_untuned:
         untuned_csv = out / f"{gemm_type}_untuned_shapes.csv"
         with open(untuned_csv, "w", newline="") as f:
@@ -170,7 +175,6 @@ def extract_gemm_shapes(
         if verbose:
             print(f"Untuned -> {untuned_csv}")
 
-    # Write combined summary (M, N, K, status)
     all_keys = tuned_only_keys | all_untuned
     combined = []
     for key in sorted(all_keys):
@@ -202,15 +206,118 @@ def extract_gemm_shapes(
     }
 
 
+def extract_fmoe_shapes(
+    log_dir: str,
+    output_dir: str = None,
+    verbose: bool = True,
+) -> dict:
+    """
+    Extract untuned FMoE shapes from log files.
+
+    Parses lines like:
+        [fused_moe] using 1stage default for (256, 32768, 3072, 1536, 256, 8,
+        'ActivationType.Silu', 'torch.bfloat16', 'torch.float8_e4m3fn',
+        'torch.float8_e4m3fn', 'QuantType.per_1x128', True, False)
+
+    Tuned FMoE shapes are used silently (no log output), so only untuned
+    shapes can be extracted.
+
+    Returns:
+        Dict with "untuned" list of shape dicts
+    """
+    # (cu_num, token, model_dim, inter_dim, expert, topk, act_type, dtype,
+    #  q_dtype_a, q_dtype_w, q_type, use_g1u1, doweight_stage1)
+    fmoe_re = re.compile(
+        r"\[fused_moe\] using \w+ default for "
+        r"\((\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*"
+        r"'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*"
+        r"(\w+),\s*(\w+)\)"
+    )
+
+    log_path = Path(log_dir)
+    log_files = list(log_path.rglob("*.log"))
+
+    if verbose:
+        print(f"Scanning {len(log_files)} log file(s) for untuned FMoE shapes...")
+
+    # Key by the full config tuple (excluding cu_num) to deduplicate
+    all_shapes = {}
+    files_with_matches = 0
+
+    for log_file in log_files:
+        file_count = 0
+        try:
+            with open(log_file, "r", errors="replace") as f:
+                for line in f:
+                    if "fused_moe" not in line or "default for" not in line:
+                        continue
+
+                    m = fmoe_re.search(line)
+                    if m:
+                        _cu_num = int(m.group(1))
+                        row = {
+                            "token": int(m.group(2)),
+                            "model_dim": int(m.group(3)),
+                            "inter_dim": int(m.group(4)),
+                            "expert": int(m.group(5)),
+                            "topk": int(m.group(6)),
+                            "act_type": m.group(7),
+                            "dtype": m.group(8),
+                            "q_dtype_a": m.group(9),
+                            "q_dtype_w": m.group(10),
+                            "q_type": m.group(11),
+                            "use_g1u1": 1 if m.group(12) == "True" else 0,
+                            "doweight_stage1": 1 if m.group(13) == "True" else 0,
+                        }
+                        key = tuple(row.values())
+                        if key not in all_shapes:
+                            all_shapes[key] = row
+                        file_count += 1
+
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: could not read {log_file.name}: {e}")
+            continue
+
+        if file_count:
+            files_with_matches += 1
+            if verbose:
+                rel = log_file.relative_to(log_path)
+                print(f"  {rel}: {file_count} untuned FMoE shapes")
+
+    sorted_shapes = sorted(
+        all_shapes.values(),
+        key=lambda r: (r["token"], r["model_dim"], r["inter_dim"], r["expert"], r["topk"]),
+    )
+
+    out = Path(output_dir) if output_dir else log_path
+    out.mkdir(parents=True, exist_ok=True)
+
+    if verbose:
+        print(f"\nUntuned FMoE: {len(sorted_shapes)} unique configs from {files_with_matches} file(s)")
+
+    if sorted_shapes:
+        fmoe_csv = out / "fmoe_untuned_shapes.csv"
+        with open(fmoe_csv, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=FMOE_COLS)
+            writer.writeheader()
+            writer.writerows(sorted_shapes)
+        if verbose:
+            print(f"FMoE   -> {fmoe_csv}")
+
+    return {"untuned": sorted_shapes}
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract tuned and untuned GEMM shapes from docker container logs",
+        description="Extract tuned and untuned AITER kernel shapes from docker container logs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python extract_gemm_shapes.py ./logs
   python extract_gemm_shapes.py ./logs --gemm-type a8w8_blockscale
-  python extract_gemm_shapes.py ./logs -o ./shapes
+  python extract_gemm_shapes.py ./logs --fmoe
+  python extract_gemm_shapes.py ./logs --all -o ./shapes
         """,
     )
 
@@ -225,6 +332,16 @@ Examples:
         help='GEMM type to extract (default: "a8w8_blockscale")',
     )
     parser.add_argument(
+        "--fmoe",
+        action="store_true",
+        help="Extract FMoE shapes instead of blockscale GEMM shapes",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Extract both blockscale GEMM and FMoE shapes",
+    )
+    parser.add_argument(
         "--output-dir",
         "-o",
         default=None,
@@ -235,13 +352,35 @@ Examples:
     )
 
     args = parser.parse_args()
+    verbose = not args.quiet
 
-    extract_gemm_shapes(
-        log_dir=args.log_dir,
-        gemm_type=args.gemm_type,
-        output_dir=args.output_dir,
-        verbose=not args.quiet,
-    )
+    if args.fmoe:
+        extract_fmoe_shapes(
+            log_dir=args.log_dir,
+            output_dir=args.output_dir,
+            verbose=verbose,
+        )
+    elif args.all:
+        extract_gemm_shapes(
+            log_dir=args.log_dir,
+            gemm_type=args.gemm_type,
+            output_dir=args.output_dir,
+            verbose=verbose,
+        )
+        if verbose:
+            print()
+        extract_fmoe_shapes(
+            log_dir=args.log_dir,
+            output_dir=args.output_dir,
+            verbose=verbose,
+        )
+    else:
+        extract_gemm_shapes(
+            log_dir=args.log_dir,
+            gemm_type=args.gemm_type,
+            output_dir=args.output_dir,
+            verbose=verbose,
+        )
 
     return 0
 
