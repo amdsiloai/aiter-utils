@@ -8,7 +8,7 @@ Utilities for tuning, benchmarking, and analyzing [AITER](https://github.com/ROC
 |--------|-------------|
 | [`fetch_run_logs.py`](fetch_run_logs.py) | Download container logs from Databricks MLflow artifacts |
 | [`extract_gemm_shapes.py`](extract_gemm_shapes.py) | Extract untuned GEMM shapes from container logs |
-| [`benchmark_analysis.py`](benchmark_analysis.py) | Fetch and analyze benchmark results from Databricks MLflow |
+| [`mlflow_client.py`](mlflow_client.py) | Lightweight Databricks MLflow client (shared library) |
 
 ## Documentation
 
@@ -67,8 +67,7 @@ aiter-utils/
 ├── .env.template
 ├── fetch_run_logs.py          # Download MLflow container logs
 ├── extract_gemm_shapes.py     # Parse logs for untuned shapes
-├── benchmark_analysis.py      # MLflow benchmark analysis
-├── utils.py                   # Shared utilities
+├── mlflow_client.py           # Lightweight Databricks MLflow client
 ├── docs/
 │   └── aiter_tuning_guide.md  # Full tuning guide
 ├── logs/                      # Downloaded logs (gitignored)

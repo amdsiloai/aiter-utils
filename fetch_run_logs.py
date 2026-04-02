@@ -30,7 +30,7 @@ try:
 except ImportError:
     pass
 
-from benchmark_analysis import DatabricksMLflowClient, format_timestamp
+from mlflow_client import DatabricksMLflowClient, format_timestamp
 
 
 def fetch_logs_for_experiments(
