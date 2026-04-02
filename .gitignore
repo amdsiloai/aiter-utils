@@ -1,0 +1,13 @@
+# Credentials
+.env
+
+# Downloaded logs (can be large)
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# OS
+.DS_Store
