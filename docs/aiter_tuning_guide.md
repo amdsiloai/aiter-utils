@@ -11,10 +11,10 @@ AITER ships with default kernel selections that work across all shapes but are n
 for any specific model. Tuning selects the fastest CK/CK-Tile kernel variant per (M, N, K)
 shape for two operator families:
 
-| Operator | What it tunes | Config files |
-|----------|--------------|--------------|
-| **Blockscale GEMM** | Dense linear projections (QKV, output, gate/up/down for shared expert) | `a8w8_blockscale_{un,}tuned_gemm.csv` |
-| **Fused MoE (FMoE)** | Two-stage MoE dispatch (gate + expert GEMM) | `{un,}tuned_fmoe.csv` |
+| Operator | What it tunes | Config files | AITER reference |
+|----------|--------------|--------------|-----------------|
+| **Blockscale GEMM** | Dense linear projections (QKV, output, gate/up/down for shared expert) | `a8w8_blockscale_{un,}tuned_gemm.csv` | [csrc/ck_gemm_a8w8_blockscale](https://github.com/ROCm/aiter/tree/main/csrc/ck_gemm_a8w8_blockscale) |
+| **Fused MoE (FMoE)** | Two-stage MoE dispatch (gate + expert GEMM) | `{un,}tuned_fmoe.csv` | [csrc/ck_gemm_moe_2stages_codegen](https://github.com/ROCm/aiter/tree/main/csrc/ck_gemm_moe_2stages_codegen) |
 
 Tuning is **per-GPU-architecture** (gfx942, gfx950, ...) and should be re-run when
 switching hardware or significantly changing AITER versions.
@@ -33,6 +33,8 @@ AITER_REBUILD=1 python3 setup.py develop
 ---
 
 ## 1. Blockscale GEMM Tuning
+
+> AITER upstream docs: [ck_gemm_a8w8_blockscale README](https://github.com/ROCm/aiter/tree/main/csrc/ck_gemm_a8w8_blockscale)
 
 ### 1.1 Input shapes
 
@@ -126,6 +128,8 @@ paste /tmp/before.txt /tmp/after.txt | column -t
 ---
 
 ## 2. Fused MoE (FMoE) Tuning
+
+> AITER upstream docs: [ck_gemm_moe_2stages_codegen](https://github.com/ROCm/aiter/tree/main/csrc/ck_gemm_moe_2stages_codegen)
 
 ### 2.1 Input shapes
 
@@ -390,6 +394,8 @@ echo "Shapes needing tuning: $(wc -l < /tmp/missing.txt)"
 
 | File | Description |
 |------|-------------|
+| [`csrc/ck_gemm_a8w8_blockscale/`](https://github.com/ROCm/aiter/tree/main/csrc/ck_gemm_a8w8_blockscale) | Blockscale GEMM tuning infrastructure (tuner, kernels, README) |
+| [`csrc/ck_gemm_moe_2stages_codegen/`](https://github.com/ROCm/aiter/tree/main/csrc/ck_gemm_moe_2stages_codegen) | Fused MoE tuning infrastructure |
 | `aiter/configs/a8w8_blockscale_untuned_gemm.csv` | Input shapes for blockscale GEMM tuning (M, N, K) |
 | `aiter/configs/a8w8_blockscale_tuned_gemm.csv` | Tuned blockscale GEMM results |
 | `aiter/configs/untuned_fmoe.csv` | Input shapes for FMoE tuning |
@@ -397,5 +403,3 @@ echo "Shapes needing tuning: $(wc -l < /tmp/missing.txt)"
 | `aiter/configs/model_configs/` | Model-specific tuned configs |
 | `op_tests/test_gemm_a8w8_blockscale.py` | Blockscale GEMM microbenchmark |
 | `op_tests/test_moe_blockscale.py` | Fused MoE microbenchmark |
-| `csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py` | Blockscale GEMM tuner |
-| `csrc/ck_gemm_moe_2stages_codegen/gemm_moe_tune.py` | Fused MoE tuner |
